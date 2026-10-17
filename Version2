@@ -1,0 +1,242 @@
+_G.AutoFarmEnabled = true
+local TOGGLE_KEY = Enum.KeyCode.K
+
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local UserInputService = game:GetService("UserInputService")
+
+local promptConnection = ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
+    if _G.AutoFarmEnabled then
+        prompt.HoldDuration = 0
+    end
+end)
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerData = LocalPlayer:WaitForChild("Data")
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local StorageRemote = ReplicatedStorage:WaitForChild("StorageRemote")
+
+local ReliableRemote = ReplicatedStorage:WaitForChild("ABC - First Priority")
+               :WaitForChild("Utility")
+               :WaitForChild("Modules")
+               :WaitForChild("Warp")
+               :WaitForChild("Index")
+               :WaitForChild("Event")
+               :WaitForChild("Reliable")
+
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local CurrentStandObj = PlayerData:WaitForChild("Stand")
+local InCombatGui = PlayerGui:WaitForChild("InCombat")
+
+local LivingFolder = workspace:WaitForChild("Living", 5)
+local SpawnFolder = workspace:WaitForChild("Map", 5):WaitForChild("RuinedCity", 5):WaitForChild("Spawn", 5)
+
+local childAddedConnection = nil
+local characterAddedConnection = nil
+local combatConnection = nil
+
+local function isInCombat()
+    return InCombatGui and InCombatGui:IsA("ScreenGui") and InCombatGui.Enabled
+end
+
+local function resetCharacter()
+    if not _G.AutoFarmEnabled then return end
+    if Character and Character:FindFirstChild("Humanoid") then
+        Character.Humanoid.Health = 0
+    end
+end
+
+local function changeSpec(slotNumber)
+    if not _G.AutoFarmEnabled or isInCombat() then return false end
+    if not slotNumber or type(slotNumber) ~= "number" then return false end
+    
+    local slotName = "Slot" .. tostring(slotNumber)
+    local slot = StorageRemote:FindFirstChild(slotName)
+    if slot and slot:IsA("RemoteEvent") then
+        return pcall(function() slot:FireServer() end)
+    end
+    return false
+end
+
+local function getAllSlotsData()
+    local slotsTable = {}
+    for _, child in ipairs(PlayerData:GetChildren()) do
+        local slotNumStr = child.Name:match("^Slot(%d+)$")
+        if slotNumStr then slotsTable[tonumber(slotNumStr)] = child.Value end
+    end
+    return slotsTable
+end
+
+local function equipStandById(targetId)
+    if not _G.AutoFarmEnabled or isInCombat() then return false end
+    
+    if type(targetId) == "table" then
+        local currentId = CurrentStandObj and CurrentStandObj.Value
+        if currentId and currentId >= targetId[1] and currentId <= targetId[2] then
+            return true
+        end
+        for slotNumber, slotValue in pairs(getAllSlotsData()) do
+            if slotValue >= targetId[1] and slotValue <= targetId[2] then 
+                return changeSpec(slotNumber) 
+            end
+        end
+    else
+        if CurrentStandObj and CurrentStandObj.Value == targetId then return true end
+        for slotNumber, slotValue in pairs(getAllSlotsData()) do
+            if slotValue == targetId then return changeSpec(slotNumber) end
+        end
+    end
+    return false
+end
+
+local function teleportToPart(part)
+    if not _G.AutoFarmEnabled or isInCombat() or not part then return false end
+    local myRoot = Character:FindFirstChild("HumanoidRootPart")
+    if myRoot then
+        myRoot.AssemblyLinearVelocity = Vector3.zero
+        myRoot.CFrame = part.CFrame
+        return true
+    end
+    return false
+end
+
+local function firePrompt(promptInstance)
+    if not _G.AutoFarmEnabled or isInCombat() or not promptInstance or not promptInstance.Enabled then return false end
+    
+    local parentPart = promptInstance:FindPartOnInstance() or promptInstance.Parent
+    if parentPart and parentPart:IsA("BasePart") then
+        teleportToPart(parentPart)
+        task.wait(0.1)
+    end
+    
+    pcall(function()
+        promptInstance:InputBegan(Players.LocalInputSource)
+        fireproximityprompt(promptInstance)
+    end)
+    return true
+end
+
+local function collectItem(itemParentName, itemName)
+    if not _G.AutoFarmEnabled or isInCombat() then return false end
+    local parentFolder = workspace:FindFirstChild(itemParentName)
+    local item = parentFolder and parentFolder:FindFirstChild(itemName)
+    
+    if item then
+        local targetPart = item:IsA("BasePart") and item or item:FindFirstChildWhichIsA("BasePart")
+        if targetPart and teleportToPart(targetPart) then
+            return true
+        end
+    end
+    return false
+end
+
+local function runSummonPhase()
+    if not _G.AutoFarmEnabled or isInCombat() then return end
+    
+    if not equipStandById({124, 129}) then return end
+    task.wait(0.3)
+    
+    if not _G.AutoFarmEnabled or isInCombat() then return end
+    pcall(function()
+        local useItemRemote = ReplicatedStorage:WaitForChild("UseItem", 2):WaitForChild("OFA", 2)
+        if useItemRemote then useItemRemote:FireServer() end
+    end)
+    task.wait(0.2)
+    
+    if not _G.AutoFarmEnabled or isInCombat() then return end
+    if SpawnFolder then
+        local promptB = SpawnFolder:FindFirstChild("ProximityPromptB")
+        local promptA = SpawnFolder:FindFirstChild("ProximityPrompt")
+        
+        if promptB and promptB.Enabled then firePrompt(promptB)
+        elseif promptA and promptA.Enabled then firePrompt(promptA)
+        end
+    end
+end
+
+local function handleCombat(npc)
+    if not _G.AutoFarmEnabled then return end
+    local humanoid = npc:WaitForChild("Humanoid", 5)
+    local root = npc:WaitForChild("HumanoidRootPart", 5)
+    
+    if combatConnection then combatConnection:Disconnect() end
+    
+    combatConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not _G.AutoFarmEnabled then
+            if combatConnection then combatConnection:Disconnect() end
+            return
+        end
+        
+        if not npc or not humanoid or humanoid.Health <= 0 or not Character then
+            pcall(function()
+                local args = { buffer.fromstring("\026"), buffer.fromstring("\254\001\000\006\001H") }
+                ReliableRemote:FireServer(unpack(args))
+            end)
+            if combatConnection then combatConnection:Disconnect() end
+            
+            if isInCombat() then resetCharacter() end
+            return
+        end
+        
+        equipStandById(13)
+        local myRoot = Character:FindFirstChild("HumanoidRootPart")
+        if myRoot and root then
+            myRoot.AssemblyLinearVelocity = Vector3.zero
+            myRoot.CFrame = root.CFrame * CFrame.new(0, 2, -3)
+        end
+    end)
+end
+
+local function startAutoFarm()
+    if LivingFolder then
+        childAddedConnection = LivingFolder.ChildAdded:Connect(function(child)
+            if child.Name == "Deku" or child.Name == "Roland" or child.Name == "AngelicaWeak" then
+                handleCombat(child)
+            end
+        end)
+    end
+
+    characterAddedConnection = LocalPlayer.CharacterAdded:Connect(function(newCharacter)
+        Character = newCharacter
+        if not _G.AutoFarmEnabled then return end
+        task.wait(1)
+        
+        if collectItem("Item2", "OA's Grace") or collectItem("Item", "Gloves") then
+            task.wait(0.5)
+        end
+        
+        runSummonPhase()
+    end)
+
+    if not isInCombat() then runSummonPhase() else resetCharacter() end
+end
+
+local function stopAutoFarm()
+    if childAddedConnection then childAddedConnection:Disconnect() end
+    if characterAddedConnection then characterAddedConnection:Disconnect() end
+    if combatConnection then combatConnection:Disconnect() end
+    
+    if Character and Character:FindFirstChild("HumanoidRootPart") then
+        Character.HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, -50, 0)
+    end
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.KeyCode == TOGGLE_KEY then
+        _G.AutoFarmEnabled = not _G.AutoFarmEnabled
+        
+        if _G.AutoFarmEnabled then
+            startAutoFarm()
+        else
+            stopAutoFarm()
+        end
+    end
+end)
+
+if _G.AutoFarmEnabled then
+    startAutoFarm()
+end
